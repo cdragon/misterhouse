@@ -115,6 +115,7 @@ sub send
 		$interface->_send_cmd($self, $self->send_timeout);
 		if ($self->callback)
                 {
+main::print_log("[Insteon::BaseMessage->send] DEBUG4: Calling the message callback") if $main::Debug{insteon} >= 5;
 			package main;
 			eval $self->callback;
 			&::print_log("[Insteon::BaseMessage] problem w/ retry callback: $@") if $@;

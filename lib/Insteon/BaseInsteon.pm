@@ -650,6 +650,7 @@ sub _process_command_stack
 		# for now, be "dumb" and just unset it
 		$$self{awaiting_ack} = 0;
 	}
+main::print_log("[Insteon::BaseObject->_process_command_stack] DEBUG4:  \$\$self{awaiting_ack}=".($$self{awaiting_ack}?'true':'false')) if $main::Debug{insteon} >= 5;
 	if (!($$self{awaiting_ack})) {
 		my $callback = undef;
 		my $message = pop(@{$$self{command_stack}});
@@ -693,7 +694,7 @@ sub _process_command_stack
 			package Insteon::BaseObject;
 		}
 	} else {
-#		&::print_log("[Insteon_Device] " . $self->get_object_name . " command queued but not yet sent; awaiting ack from prior command") if $main::Debug{insteon};
+		main::print_log("[Insteon_Device] " . $self->get_object_name . " command queued but not yet sent; awaiting ack from prior command") if $main::Debug{insteon} >= 4;
 	}
 }
 

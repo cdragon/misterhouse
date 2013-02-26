@@ -168,11 +168,13 @@ sub check_for_data {
       	# if no data being received, then check if any timeouts have expired
         	if ($self->_check_timeout('command') == 1)
                 {
+main::print_log("[Insteon_PLM->check_for_data] DEBUG4: processing command timeout") if $main::Debug{insteon} >= 5;
             		$self->_clear_timeout('command');
             		if ($self->transmit_in_progress) {
 #               &::print_log("[Insteon_PLM] WARN: No acknowledgement from PLM to last command requires forced abort of current command."
 #                  . " This may reflect a problem with your environment.");
 #               pop(@{$$self{command_stack2}}); # pop the active command off the queue
+main::print_log("[Insteon_PLM->check_for_data] DEBUG4: calling retry_active_message") if $main::Debug{insteon} >= 5;
 	       			$self->retry_active_message();
                			$self->process_queue();
             		}
@@ -185,6 +187,7 @@ sub check_for_data {
 		}
                 elsif ($self->_check_timeout('xmit') == 1)
                 {
+main::print_log("[Insteon_PLM->check_for_data] DEBUG4: processing xmit timeout") if $main::Debug{insteon} >= 5;
            		$self->_clear_timeout('xmit');
          		if (!($self->transmit_in_progress))
                         {
@@ -285,6 +288,7 @@ sub _send_cmd {
 		return;
 	}
 	unshift(@{$$self{command_history}},$::Time);
+main::print_log("[Insteon_PLM->_send_cmd] DEBUG4: Setting transmit_in_progress == true") if $main::Debug{insteon} >= 5;
 	$self->transmit_in_progress(1);
 
         my $command = $message->interface_data;
@@ -317,6 +321,7 @@ sub _send_cmd {
 
 
 	if ($delay) {
+main::print_log("[Insteon_PLM->_send_cmd] DEBUG4: Setting xmit timeout == ". $delay * 1000) if $main::Debug{insteon} >= 5;
 		$self->_set_timeout('xmit',$delay * 1000);
 	}
    	$$self{'last_change'} = $main::Time;

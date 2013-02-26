@@ -156,12 +156,14 @@ sub clear_active_message
 	my ($self) = @_;
         $$self{active_message} = undef;
 	$self->transmit_in_progress(0);
+main::print_log("[Insteon::BaseInterface->clear_active_message] DEBUG4: ") if $main::Debug{insteon} >= 5;
 }
 
 sub retry_active_message
 {
 	my ($self) = @_;
 	$self->transmit_in_progress(0);
+main::print_log("[Insteon::BaseInterface->retry_active_message] DEBUG4: ") if $main::Debug{insteon} >= 5;
 }
 
 sub transmit_in_progress
@@ -170,6 +172,9 @@ sub transmit_in_progress
         if (defined $xmit_flag)
         {
         	$$self{xmit_in_progress} = $xmit_flag;
+main::print_log("[Insteon::BaseInterface->transmit_in_progress] DEBUG4: setting xmit_in_progress to ".($xmit_flag ? 'true' : 'false')) if $main::Debug{insteon} >= 5;
+        } else {
+main::print_log("[Insteon::BaseInterface->transmit_in_progress] DEBUG4: checking xmit_in_progress; returning ".($$self{xmit_in_progress} || ($self->_check_timeout('xmit')==0)?'true':'false')) if $main::Debug{insteon} >= 5;
         }
         # also factor in xmit timer since this must be honored to allow
         #   adequate time to elapse
@@ -198,6 +203,7 @@ sub queue_message
 			if ($setby and ref($setby) and $setby->can('set_retry_timeout')
                            and $setby->get_object_name)
                         {
+main::print_log("[Insteon::BaseInterface->queue_message] DEBUG4: Adding set_retry_timeout to message callback") if $main::Debug{insteon} >= 5;
 				$message->callback($setby->get_object_name . "->set_retry_timeout()");
 			}
 			unshift(@{$$self{command_stack2}}, $message);
@@ -334,6 +340,7 @@ sub on_standard_insteon_received
 	my %msg = &Insteon::InsteonMessage::command_to_hash($message_data);
 	if (%msg)
         {
+main::print_log("[Insteon::BaseInterface->on_standard_insteon_received] DEBUG4: calling _set_timeout for xmit") if $main::Debug{insteon} >= 5;
 		if ($msg{hopsleft} > 0) {
 			&::print_log("[Insteon::BaseInterface] DEBUG2: Message received with $msg{hopsleft} hops left, delaying next "
 			."transmit to avoid collisions with remaining hops.") if $main::Debug{insteon} >= 2;
@@ -527,6 +534,7 @@ sub _set_timeout
 	my $tickcount = &main::get_tickcount + $timeout_in_millis;
 	$tickcount += 2**32 if $tickcount < 0; # force a wrap; to be handleded by check timeout
 	$$self{"_timeout_$timeout_name"} = $tickcount;
+main::print_log("[Insteon::BaseInterface->_set_timeout] DEBUG4: name=_timeout_$timeout_name: $timeout_in_millis") if $main::Debug{insteon} >= 5;
 }
 
 #
@@ -548,6 +556,7 @@ sub _clear_timeout
 {
 	my ($self, $timeout_name) = @_;
 	$$self{"_timeout_$timeout_name"} = undef;
+main::print_log("[Insteon::BaseInterface->_clear_timeout] DEBUG4: ") if $main::Debug{insteon} >= 5;
 }
 
 sub _aldb
