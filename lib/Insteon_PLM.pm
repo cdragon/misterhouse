@@ -81,16 +81,37 @@ my %prefix = (
 			rf_sleep 		=> '0272',
 			plm_get_config 		=> '0273'
 );
+   
+my $net_plm_socket = undef;
+
+sub startup {
+   my $instance = 'Insteon_PLM';
+   if(!(defined $net_plm_socket) && (defined $::config_parms{$instance . "_network_address"})) {
+      $net_plm_socket = new Socket_Item(undef, undef, $::config_parms{$instance . "_network_address"}, 'insteon_net_plm', 'tcp', 'raw', undef);
+      start $net_plm_socket;
+   }
+}
+
+sub send_command_to_net_plm {
+        my ($self, $message) = @_;
+        $net_plm_socket->set($message);
+}
+
 
 
 sub serial_startup {
-   my ($instance) = @_;
-   my $port       = $::config_parms{$instance . "_serial_port"};
-   my $speed = 19200;
+        my ($instance) = @_;
+        if(defined $::config_parms{$instance . "_network_address"}) {
+                &::print_log( "[Insteon_PLM] ERROR: You can't define both Insteon_PLM_network_address and Insteon_PLM_serial_port in your mh.private.ini file."
+                        . "  If you define Insteon_PLM_network_address you must also define 'Insteon_PLM_module = Insteon_PLM' without the quotes." );
+        }
+        else {
+                my $port       = $::config_parms{$instance . "_serial_port"};
+                my $speed = 19200;
 
-   &::print_log("[Insteon_PLM] serial:$port:$speed");
-   &::serial_port_create($instance, $port, $speed,'none','raw');
-
+                &::print_log("[Insteon_PLM] serial:$port:$speed");
+                &::serial_port_create($instance, $port, $speed,'none','raw');
+        }
 }
 
 sub new {
@@ -138,26 +159,46 @@ sub restore_string
 }
 
 sub check_for_data {
+        my ($self) = @_;
+        my $data = '';
 
-	my ($self) = @_;
-      	my $port_name = $$self{port_name};
-      	&::check_for_generic_serial_data($port_name) if $::Serial_Ports{$port_name}{object};
-      	my $data = $::Serial_Ports{$port_name}{data};
-      	# always check for data first; if it exists, then process; otherwise check if pending commands exist
-      	if ($data)
+        my $port_name = $$self{port_name};
+        my $instance = $port_name;
+      	        
+        if(defined $::config_parms{$instance . "_network_address"}) {
+      	        if(!(defined $net_plm_socket)) {
+      	                # I could call $self->startup() here to try to make a connection, but that should
+      	                # have already been done when _send_cmd attempted to send data earlier.
+      	                # If we tried to connect at this point, we'd be trying and failing once every 
+      	                # second or so, and that isn't worth it.  I don't log an error here for the
+      	                # same reason.
+      	                return;
+      	        }
+	        $data = said $net_plm_socket;
+        }
+        else {
+              	my $port_name = $$self{port_name};
+      	        &::check_for_generic_serial_data($port_name) if $::Serial_Ports{$port_name}{object};
+      	        $data = $::Serial_Ports{$port_name}{data};
+        }
+      	
+        # always check for data first; if it exists, then process; otherwise check if pending commands exist
+        if ($data)
         {
-        	# now, clear the serial port data so that any subsequent command processing doesn't result in an immediate filling/overwriting
-	        if (length($$self{_data_fragment}))
-        	{
-#        		$main::Serial_Ports{$port_name}{data}=pack("H*",$$self{_data_fragment});
-			# always clear the buffer since we're maintaining the fragment separately
-               		$main::Serial_Ports{$port_name}{data} = '';
-       		}
-       		else
-        	{
-        		$main::Serial_Ports{$port_name}{data} = '';
-        	}
-
+                if(!(defined $net_plm_socket)) {
+                	# now, clear the serial port data so that any subsequent command processing doesn't result in an immediate filling/overwriting
+	                if (length($$self{_data_fragment}))
+                	{
+                		# $main::Serial_Ports{$port_name}{data}=pack("H*",$$self{_data_fragment});
+			        # always clear the buffer since we're maintaining the fragment separately
+                       		$main::Serial_Ports{$port_name}{data} = '';
+               		}
+               		else
+                	{
+                		$main::Serial_Ports{$port_name}{data} = '';
+                	}
+                }
+                
          	#lets turn this into Hex. I hate perl binary funcs
         	my $data = unpack "H*", $data;
 
@@ -280,9 +321,14 @@ sub _aldb
 sub _send_cmd {
 	my ($self, $message, $cmd_timeout) = @_;
 	my $instance = $$self{port_name};
-	if (!(ref $main::Serial_Ports{$instance}{object})) {
-		print "WARN: Insteon_PLM serial port not initialized!\n";
-		return;
+	if(!(defined $net_plm_socket) && !(ref $main::Serial_Ports{$instance}{object})) {
+	        if(defined $::config_parms{$instance . "_network_address"}) {
+	                $self->startup();
+	        }
+	        if(!(defined $net_plm_socket)) {
+        		print "WARN: Not connected to Insteon PLM via serial port or network interface!\n";
+	        	return;
+	        }
 	}
 	unshift(@{$$self{command_history}},$::Time);
 	$self->transmit_in_progress(1);
@@ -310,11 +356,16 @@ sub _send_cmd {
                 }
         }
 
-	&::print_log( "[Insteon_PLM] DEBUG3: Sending  PLM raw data: ".lc($command)) if $main::Debug{insteon} >= 3;
+	&::print_log( "[Insteon_PLM] DEBUG3: Sending PLM raw data: ".lc($command)) if $main::Debug{insteon} >= 3;
 	&::print_log( "[Insteon_PLM] DEBUG4:\n".Insteon::MessageDecoder::plm_decode($command)) if $main::Debug{insteon} >= 4;
 	my $data = pack("H*",$command);
-	$main::Serial_Ports{$instance}{object}->write($data) if $main::Serial_Ports{$instance};
-
+	
+        if(defined $net_plm_socket) {
+        	$self->send_command_to_net_plm($data);
+        }
+        else {
+	        $main::Serial_Ports{$instance}{object}->write($data) if $main::Serial_Ports{$instance};
+        }
 
 	if ($delay) {
 		$self->_set_timeout('xmit',$delay * 1000);
@@ -325,8 +376,8 @@ sub _send_cmd {
 
 sub _parse_data {
 	my ($self, $data) = @_;
-   my ($name, $val);
-
+        my ($name, $val);
+	
 	# it is possible that a fragment exists from a previous attempt; so, if it exists, prepend it
 	if ($$self{_data_fragment})
         {
