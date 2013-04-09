@@ -137,9 +137,11 @@ sub send
                                 }
                         }
                         elsif (defined($$self{no_hop_increase}) && $main::Debug{insteon}){
-                        	&main::print_log("[Insteon::BaseMessage] Hop count not increased for "
-                        		. $self->setby->get_object_name . " because no_hop_increase flag was set.");
-                        	$$self{no_hop_increase} = undef;
+                                if(defined($self->setby)) {
+                                	&main::print_log("[Insteon::BaseMessage] Hop count not increased for "
+                                		. $self->setby->get_object_name . " because no_hop_increase flag was set.");
+                                	$$self{no_hop_increase} = undef;
+                                }
                         }
                 }
 

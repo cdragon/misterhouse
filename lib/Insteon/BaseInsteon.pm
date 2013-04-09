@@ -455,7 +455,13 @@ sub _is_info_request
 		&::print_log("[Insteon::BaseObject] received status for " .
 			$self->{object_name} . " with on-level: $ack_on_level%, "
 			. "hops left: $msg{hopsleft}") if $main::Debug{insteon};
-		$self->level($ack_on_level); # update the level value
+			
+		# A RemoteLinc may send Insteon Message: 18b3, meaning "Light Stop Manual Change" aka 
+		# "Stop changing On-Level".  But since RemoteLinc doesn't have a level() method defined,
+		# we will cause a crash here if we don't check if $self->can('level').
+		if($self->can('level')) {
+		        $self->level($ack_on_level); # update the level value
+		}
 		if ($ack_on_level == 0) {
 			$self->SUPER::set('off', $ack_setby);
 		} elsif ($ack_on_level > 0 and !($self->isa('Insteon::DimmableLight'))) {
