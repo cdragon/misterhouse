@@ -85,7 +85,10 @@ my %prefix = (
    
 my $net_plm_socket = undef;
 my $net_plm_socket_select = undef;
-my $net_plm_last_reconnect_attempt = 0;
+my $net_plm_last_reconnect_attempt_time = 0;
+my $net_plm_last_ping_time = 0;
+my $net_plm_unacknowledged_commands = 0;
+my $net_plm_sent_ping_message = 0;
 
 sub startup {
         my $instance = 'Insteon_PLM';
@@ -95,6 +98,9 @@ sub startup {
                 $net_plm_socket = new IO::Socket::INET->new(PeerAddr => $host,
                                                  PeerPort => $port,
                                                  Proto => 'tcp'
+                                                 # I could add Blocking => 0 here, but from what I've read it's unreliable.
+                                                 # http://stackoverflow.com/questions/11895632/recv-blocking-on-perl-even-though-socket-is-non-blocking
+                                                 # describes a more reliable method, but I decided to use IO::Select to avoid blocking instead.
                                                  );
                 # I stopped using Socket_Item because it doesn't seem to detect disconnection from the PLM
                 # under any circumstances I tried.
@@ -108,39 +114,113 @@ sub startup {
                 else {
                         $net_plm_socket->autoflush(1);
                         $net_plm_socket_select = new IO::Select($net_plm_socket);
+                        $net_plm_unacknowledged_commands = 0;
+                        $net_plm_last_reconnect_attempt_time = time;
+                        $net_plm_sent_ping_message = 0;
+                        $net_plm_last_ping_time = time;
                 }
         }
 }
 
 sub connected_to_net_plm {
-        # None of the checks below will tell us if the socket got disconnected by cutting power to the PLM
-        # or by leaving its network cable pulled out.  This may be due to running MH in a Virtualbox
-        # machine where the Virtualbox network driver is maintaining the connection in some sort of
-        # partly open state even if the PLM disappears.  If you use the Virtualbox networking dialog
-        # to tell it the cable is unplugged, $net_plm_socket->connected will return false, though
-        # only after you tell it to plug the cable back in!
-        # I spent far too much time trying a lot of different methods to detect disconnection from
-        # PLM when a send or receive to the PLM is attempted, but $net_plm_socket->connected is
-        # the only method I've ever seen detect a disconnection.
+        my ($self) = @_;
+        my $instance = $$self{port_name};
+        
         if(!(defined $net_plm_socket) || !$net_plm_socket->connected) {
                 return 0;
         }
+
+        # I've read various opinions on the net about the correct way to detect a disconnected
+        # socket, from watching for the SIGPIPE signal to calling select->can_read(0) and if
+        # it returns true but sysread returns undef, the connection is broken.  From what I've
+        # read, TCP expects a periodic ACK packet back whenever it's sent a number of packets,
+        # so I don't understand why my tests sending a lot of data to the PLM when it's
+        # disconnected never detect the disconnection due to the ACK not coming back.  It
+        # might have something to do with using a NAT network connection in the Virtualbox
+        # machine running MH.
+        # Either way, I've spent far too much time trying all the methods and none of them
+        # will tell us if the socket got disconnected by cutting power to the PLM or by
+        # leaving its network cable pulled out, at least on my system.
+        # $net_plm_socket->connected returns false only under certain limited scenarios I've
+        # come up with.
+        # A few people on the net will tell you that the only way to detect a socket disconnect
+        # under all circumstances is if you send a command and don't get back a response.  So
+        # we use $net_plm_unacknowledged_commands to check for that.  Unfortunately, that means
+        # users may not detect a disconnect until they happen to send out data, so I also added
+        # the option to send a ping every X seconds by defining
+        # "Insteon_PLM_network_ping_delay = X"
+        if($net_plm_unacknowledged_commands >= 3) {
+                # Every PLM command sent should have an immediate response of some sort, even if it's just
+                # an echo of the same command or a 15 (PLM too busy).  If we see no response for 2
+                # commands in a row, assume the connection is dead.
+                &::print_log("[Insteon_PLM] ERROR: Assuming network connection to PLM lost due to timeout responding to commands.");
+                $net_plm_socket = undef;
+                return 0;
+        }
+        
+        if((defined $::config_parms{$instance . "_network_ping_delay"}) && $::config_parms{$instance . "_network_ping_delay"} > 0) {
+                if($net_plm_sent_ping_message) {
+                        # We sent a previous ping.  See if it timed out.
+                        if($net_plm_last_ping_time < time - 2) {
+                                &::print_log("[Insteon_PLM] ERROR: Assuming network connection to PLM lost due to timeout responding to ping.");
+                                $net_plm_socket = undef;
+                                return 0;
+                        }
+                }
+                elsif($net_plm_last_ping_time < (time - $::config_parms{$instance . "_network_ping_delay"})) {
+                        # send_command_to_net_plm will cause connected_to_net_plm to be called
+                        # again, so prevent sending the ping again by $net_plm_sent_ping_message = 1;
+                        # Doing so also causes connected_to_net_plm to check for timeout on response
+                        # to the ping.
+                        $net_plm_sent_ping_message = 1;
+                        $net_plm_last_ping_time = time;
+                        
+                        # I'm worried about using PLM firmware version info as a ping request because I
+                        # once had a cheap music player corrupt its NVRAM by reading it constantly 24
+                        # hours a day as a hold music player.  I don't know about the PLM's NVRAM
+                        # quality or type or if it might cache the firmware version in standard RAM,
+                        # but if someone sets up a short ping delay I worry we could damage something.
+                        # It might be better to try using a '15' message or some other invalid message
+                        # as a ping, but I think it would require modifying Message.pm to handle a new
+                        # type of message and I don't want to tackle that right now.
+                        &::print_log("[Insteon_PLM] DEBUG4: Sending network ping to PLM by requesting its version info.") if( $main::Debug{insteon} >= 4);
+                        my $message = new Insteon::InsteonMessage('plm_info', $self);
+                        
+                        # I tried using the message failure callback system but it is never called when a
+                        # a ping has no response.
+                        #$message->failure_callback($$self{net_plm_ping_failed});
+                        #$message->send_timeout(1);
+                        
+                	$self->_send_cmd($message);
+                }
+        }
+
         return 1;
 }
 
 sub reconnect_to_net_plm {
+        my ($self) = @_;
+        
+        if($self->connected_to_net_plm()) {
+                return 1;
+        }
+        
         # Limit reconnection attempts to once per 10 seconds.
-        if($net_plm_last_reconnect_attempt < time - 10) {
-                &::print_log("[Insteon_PLM] ERROR: Network connection to PLM lost, reconnecting...");
+        if($net_plm_last_reconnect_attempt_time < time - 10) {
+                if($net_plm_last_reconnect_attempt_time > 0) {
+                        # $net_plm_last_reconnect_attempt_time = 0 means we've never been connected before,
+                        # in which case we don't show an error that the connection was lost.
+                        &::print_log("[Insteon_PLM] ERROR: Network connection to PLM lost, reconnecting...");
+                }
                 $net_plm_socket = undef;
                 startup();
-                $net_plm_last_reconnect_attempt = time;
+                $net_plm_last_reconnect_attempt_time = time;
 
-                if(connected_to_net_plm()) {
+                if($self->connected_to_net_plm()) {
                         return 1;
                 }
                 else {
-                        &::print_log("[Insteon_PLM] ERROR: Failed to connect to PLM.");
+                        $net_plm_socket = undef;
                 }
         }
         return 0;
@@ -149,7 +229,7 @@ sub reconnect_to_net_plm {
 sub send_command_to_net_plm {
         my ($self, $message) = @_;
         
-        if(!connected_to_net_plm() && !reconnect_to_net_plm()) {
+        if(!$self->connected_to_net_plm() && !$self->reconnect_to_net_plm()) {
                 return 0;
         }
         if(!$net_plm_socket_select->can_write(0) || !(defined $net_plm_socket->send($message))) {
@@ -159,6 +239,8 @@ sub send_command_to_net_plm {
                 $net_plm_socket = undef;
                 return 0;
         }
+        $net_plm_last_ping_time = time; # Any command we send is considered a ping.
+        $net_plm_unacknowledged_commands++;
         return 1;
 }
 
@@ -167,8 +249,8 @@ sub send_command_to_net_plm {
 sub serial_startup {
         my ($instance) = @_;
         if(defined $::config_parms{$instance . "_network_address"}) {
-                &::print_log( "[Insteon_PLM] ERROR: You can't define both Insteon_PLM_network_address and Insteon_PLM_serial_port in your mh.private.ini file."
-                        . "  If you define Insteon_PLM_network_address you must also define 'Insteon_PLM_module = Insteon_PLM' without the quotes." );
+                &::print_log( "[Insteon_PLM] WARN: You should not define both Insteon_PLM_network_address and Insteon_PLM_serial_port in your mh.private.ini file."
+                        . "  Insteon_PLM_network_address will be used in favor of Insteon_PLM_serial_port." );
         }
         else {
                 my $port       = $::config_parms{$instance . "_serial_port"};
@@ -231,10 +313,7 @@ sub check_for_data {
         my $instance = $port_name;
       	        
         if(defined $::config_parms{$instance . "_network_address"}) {
-      	        if(!(defined $net_plm_socket)) {
-      	                $self->startup;
-      	        }
-      	        if(connected_to_net_plm() || reconnect_to_net_plm()) {
+      	        if($self->reconnect_to_net_plm()) {
       	                if($net_plm_socket_select->can_read(0)) {
                                 my $result = $net_plm_socket->recv($data, 256);
                                 if(!(defined $result)) {
@@ -242,6 +321,12 @@ sub check_for_data {
                                         # but maybe we'll reach this point under some conditions.
                                         &::print_log("[Insteon_PLM] ERROR: Receive command from PLM failed.  Assuming network connection to PLM lost.");
                                         $net_plm_socket = undef;
+                                }
+                                elsif($data) {
+                                        # Assume any response from the PLM means the connection is still working, so
+                                        # clear $net_plm_unacknowledged_commands
+                                        $net_plm_unacknowledged_commands = 0;
+                                        $net_plm_sent_ping_message = 0;
                                 }
                          }
         	}
@@ -393,9 +478,9 @@ sub _send_cmd {
 	my $instance = $$self{port_name};
 	if(!(defined $net_plm_socket) && !(ref $main::Serial_Ports{$instance}{object})) {
 	        if(defined $::config_parms{$instance . "_network_address"}) {
-	                $self->startup;
+	                $self->reconnect_to_net_plm();
 	        }
-	        if(!(defined $net_plm_socket) || (!connected_to_net_plm() && !reconnect_to_net_plm()) ) {
+	        if(!(defined $net_plm_socket)) {
         		print "WARN: Not connected to Insteon PLM via serial port or network interface!\n";
 	        	return;
 	        }
