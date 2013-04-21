@@ -190,8 +190,8 @@ sub connected_to_net_plm {
                         # a ping has no response.
                         #$message->failure_callback($$self{net_plm_ping_failed});
                         #$message->send_timeout(1);
-                        
-                	$self->_send_cmd($message);
+                	
+                	$self->queue_message($message);
                 }
         }
 
